@@ -1,6 +1,24 @@
 // ============================================================
-// JackFlix Automation Job Runner
-// Production Ready - Environment Based Authentication
+// JackFlix Automation - Single Execution
+// GitHub Actions / Cron Friendly
+// ============================================================
+//
+// One workflow run = one execution cycle.
+//
+// Flow:
+//   Sheets
+//      ↓
+//   Determine next part
+//      ↓
+//   Search exact N.mp4 in Drive
+//      ↓
+//   If missing -> WAITING + email
+//   If found  -> Download -> Shorts check -> Gemini
+//                         -> YouTube -> Sheets -> Email
+//
+// IMPORTANT:
+// This file does NOT use setInterval().
+// GitHub Actions will start it again on the next schedule.
 // ============================================================
 
 const path = require('path');
@@ -9,17 +27,31 @@ require('dotenv').config({
   path: path.join(__dirname, '../../.env'),
 });
 
+// ============================================================
+// IMPORT PIPELINE
+// ============================================================
+
 const {
   publishNextPart,
 } = require('./publishVideo');
 
+// ============================================================
+// IMPORT SHEETS
+// ============================================================
+
 const {
+  getLastUploadedPart,
   getNextRequiredPart,
   getJobState,
 } = require('../sheets/sheetsLogger');
 
+// ============================================================
+// IMPORT EMAIL
+// ============================================================
+
 const {
   sendMissingFileAlert,
+  sendFailureEmail,
 } = require('../notifications/resendNotifier');
 
 // ============================================================
@@ -27,455 +59,165 @@ const {
 // ============================================================
 
 const JOB_START_TIME =
-  process.env.JOB_START_TIME ||
-  '20:00';
+  process.env.JOB_START_TIME || '00:00';
 
 const JOB_TIMEZONE =
-  process.env.JOB_TIMEZONE ||
-  'Asia/Kolkata';
+  process.env.JOB_TIMEZONE || 'Asia/Kolkata';
 
-const DRIVE_CHECK_INTERVAL_MINUTES =
+const MISSING_FILE_EMAIL_INTERVAL_MINUTES =
   Number(
-    process.env.DRIVE_CHECK_INTERVAL_MINUTES ||
-    10
+    process.env.MISSING_FILE_EMAIL_INTERVAL_MINUTES || 5
   );
-
-const MISSING_EMAIL_INTERVAL_MINUTES =
-  Number(
-    process.env.MISSING_FILE_EMAIL_INTERVAL_MINUTES ||
-    5
-  );
-
-const MAX_MISSING_FILE_EMAILS =
-  Number(
-    process.env.MAX_MISSING_FILE_EMAILS_PER_JOB ||
-    20
-  );
-
-// ============================================================
-// STATE
-// ============================================================
-
-let jobStartedForToday =
-  false;
-
-let jobActive =
-  false;
-
-let processingTimer =
-  null;
-
-let missingEmailTimer =
-  null;
-
-let missingEmailCount =
-  0;
-
-let lastMissingPart =
-  null;
-
-let lastJobDate =
-  null;
 
 // ============================================================
 // TIME HELPERS
 // ============================================================
 
-function getCurrentTimeInTimezone() {
-  const formatter =
-    new Intl.DateTimeFormat(
-      'en-GB',
-      {
-        timeZone:
-          JOB_TIMEZONE,
-
-        hour:
-          '2-digit',
-
-        minute:
-          '2-digit',
-
-        hour12:
-          false,
-      }
-    );
-
-  return formatter.format(
-    new Date()
-  );
+function getCurrentTime() {
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: JOB_TIMEZONE,
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+  }).format(new Date());
 }
 
-function getCurrentDateInTimezone() {
-  const formatter =
-    new Intl.DateTimeFormat(
-      'en-GB',
-      {
-        timeZone:
-          JOB_TIMEZONE,
-
-        year:
-          'numeric',
-
-        month:
-          '2-digit',
-
-        day:
-          '2-digit',
-      }
-    );
-
-  return formatter.format(
-    new Date()
-  );
-}
-
-function isStartTimeReached() {
-  const now =
-    getCurrentTimeInTimezone();
-
-  return now >=
-    JOB_START_TIME;
+function getCurrentTimestamp() {
+  return new Date().toISOString();
 }
 
 // ============================================================
-// PROCESS CHECK
+// ENV CHECK
 // ============================================================
 
-async function runProcessingCheck() {
-  if (!jobActive) {
-    return;
+function validateEnvironment() {
+  const required = [
+    'GEMINI_API_KEY',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_REFRESH_TOKEN',
+    'GOOGLE_SHEET_ID',
+    'GOOGLE_SHEET_NAME',
+    'RESEND_API_KEY',
+    'ALERT_EMAIL',
+    'RESEND_FROM_EMAIL',
+    'RAW_FOLDER_ID',
+  ];
+
+  const missing = [];
+
+  for (const key of required) {
+    if (!process.env[key]) {
+      missing.push(key);
+    }
   }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required environment variables:\n${missing.join('\n')}`
+    );
+  }
+}
+
+// ============================================================
+// MISSING FILE ALERT
+// ============================================================
+//
+// GitHub Actions will invoke this script every 5 minutes.
+// Therefore a missing file can trigger an alert every 5 minutes.
+//
+// We rely on the Sheets job state so only the currently required
+// part is alerted.
+// ============================================================
+
+async function handleWaitingForFile(
+  result
+) {
+  const partNumber =
+    result.partNumber;
+
+  const expectedFile =
+    `${partNumber}.mp4`;
+
+  console.log('\n==========================================');
+  console.log(' WAITING FOR NEXT VIDEO');
+  console.log('==========================================\n');
 
   console.log(
-    '\n🕐 Running Drive/publish check...'
+    `Expected file: ${expectedFile}`
+  );
+
+  console.log(
+    `Next Drive check will happen with the next workflow run.`
   );
 
   try {
-    const result =
-      await publishNextPart();
-
-    console.log(
-      '\nJob result:',
-      result
-    );
-
-    // --------------------------------------------------------
-    // UPLOAD SUCCESS
-    // --------------------------------------------------------
-
-    if (
-      result.status ===
-      'UPLOADED'
-    ) {
-      console.log(
-        `✅ Part ${result.partNumber} uploaded.`
-      );
-
-      // Reset missing alert state.
-      missingEmailCount =
-        0;
-
-      lastMissingPart =
-        null;
-
-      return;
-    }
-
-    // --------------------------------------------------------
-    // WAITING
-    // --------------------------------------------------------
-
-    if (
-      result.status ===
-      'WAITING'
-    ) {
-      const part =
-        result.partNumber;
-
-      if (
-        lastMissingPart !==
-        part
-      ) {
-        missingEmailCount =
-          0;
-
-        lastMissingPart =
-          part;
-
-        console.log(
-          `⏳ Waiting for ${part}.mp4`
-        );
-      }
-
-      return;
-    }
-
-  } catch (error) {
-    console.error(
-      '❌ Processing check error:',
-      error.message
-    );
-  }
-}
-
-// ============================================================
-// MISSING FILE EMAIL
-// ============================================================
-
-async function sendMissingEmailCheck() {
-  if (!jobActive) {
-    return;
-  }
-
-  try {
-    const nextPart =
-      await getNextRequiredPart();
-
     const job =
       await getJobState(
-        nextPart
+        partNumber
       );
 
-    // Only send missing alerts when
-    // we're actually waiting.
-    if (
-      job &&
-      (
-        job.status ===
-        'WAITING'
-        ||
-        job.status ===
-        'FAILED_RETRYABLE'
-      )
-    ) {
-      if (
-        lastMissingPart !==
-        nextPart
-      ) {
-        lastMissingPart =
-          nextPart;
-
-        missingEmailCount =
-          0;
-      }
-
-      if (
-        missingEmailCount >=
-        MAX_MISSING_FILE_EMAILS
-      ) {
-        console.log(
-          `⚠️ Maximum missing-file email limit reached for part ${nextPart}.`
-        );
-
-        return;
-      }
-
-      missingEmailCount++;
-
-      await sendMissingFileAlert({
-        expectedFile:
-          `${nextPart}.mp4`,
-
-        partNumber:
-          nextPart,
-
-        lastUploadedPart:
-          nextPart - 1,
-
-        nextCheckAt:
-          `In ${DRIVE_CHECK_INTERVAL_MINUTES} minutes`,
-
-        alertNumber:
-          missingEmailCount,
-      });
-
-      console.log(
-        `📧 Missing-file alert #${missingEmailCount} sent for ${nextPart}.mp4`
+    const lastUploadedPart =
+      Math.max(
+        0,
+        partNumber - 1
       );
-    }
+
+    const alertNumber =
+      Number(
+        job?.retryCount || 0
+      ) + 1;
+
+    await sendMissingFileAlert({
+      expectedFile,
+
+      partNumber,
+
+      lastUploadedPart,
+
+      nextCheckAt:
+        `Next scheduled run (~${MISSING_FILE_EMAIL_INTERVAL_MINUTES} minutes)`,
+
+      alertNumber,
+    });
+
+    console.log(
+      `✅ Missing file alert sent for ${expectedFile}.`
+    );
 
   } catch (error) {
     console.error(
-      '❌ Missing email check failed:',
-      error.message
+      '⚠️ Could not send missing file alert:'
     );
+
+    console.error(
+      error?.message || error
+    );
+
+    // Missing-file email failure should NOT make the whole
+    // automation job fail because the primary state is already
+    // stored in Sheets.
   }
 }
 
 // ============================================================
-// START JOB
+// MAIN
 // ============================================================
 
-async function startJob() {
-  if (jobActive) {
-    console.log(
-      '⚠️ Job is already active.'
-    );
+async function main() {
+  const startedAt =
+    Date.now();
 
-    return;
-  }
-
-  jobActive =
-    true;
-
-  missingEmailCount =
-    0;
-
-  lastMissingPart =
-    null;
-
-  console.log(
-    '\n=========================================='
-  );
-
-  console.log(
-    ' 🚀 JACKFLIX JOB STARTED'
-  );
-
-  console.log(
-    '==========================================\n'
-  );
-
-  console.log(
-    'Start time:',
-    JOB_START_TIME
-  );
-
-  console.log(
-    'Timezone:',
-    JOB_TIMEZONE
-  );
-
-  console.log(
-    'Drive check interval:',
-    `${DRIVE_CHECK_INTERVAL_MINUTES} min`
-  );
-
-  console.log(
-    'Missing email interval:',
-    `${MISSING_EMAIL_INTERVAL_MINUTES} min`
-  );
-
-  // First check immediately.
-  await runProcessingCheck();
-
-  // Drive processing checks.
-  processingTimer =
-    setInterval(
-      runProcessingCheck,
-      DRIVE_CHECK_INTERVAL_MINUTES *
-      60 *
-      1000
-    );
-
-  // Missing alerts.
-  missingEmailTimer =
-    setInterval(
-      sendMissingEmailCheck,
-      MISSING_EMAIL_INTERVAL_MINUTES *
-      60 *
-      1000
-    );
-}
-
-// ============================================================
-// SCHEDULER LOOP
-// ============================================================
-
-function scheduleLoop() {
-  const currentDate =
-    getCurrentDateInTimezone();
-
-  // Reset at a new day.
-  if (
-    lastJobDate &&
-    lastJobDate !==
-    currentDate
-  ) {
-    jobStartedForToday =
-      false;
-  }
-
-  lastJobDate =
-    currentDate;
-
-  if (
-    isStartTimeReached() &&
-    !jobStartedForToday
-  ) {
-    jobStartedForToday =
-      true;
-
-    startJob().catch(
-      (error) => {
-        console.error(
-          '❌ Job startup failed:',
-          error.message
-        );
-      }
-    );
-  }
-}
-
-// ============================================================
-// STOP JOB
-// ============================================================
-
-function stopJob() {
-  jobActive =
-    false;
-
-  if (
-    processingTimer
-  ) {
-    clearInterval(
-      processingTimer
-    );
-
-    processingTimer =
-      null;
-  }
-
-  if (
-    missingEmailTimer
-  ) {
-    clearInterval(
-      missingEmailTimer
-    );
-
-    missingEmailTimer =
-      null;
-  }
-
-  console.log(
-    '\n🛑 JackFlix job stopped.'
-  );
-}
-
-// ============================================================
-// START RUNNER
-// ============================================================
-
-function startRunner() {
-  console.log(
-    '\n=========================================='
-  );
-
-  console.log(
-    ' JACKFLIX AUTOMATION RUNNER'
-  );
-
-  console.log(
-    '==========================================\n'
-  );
+  console.log('\n==========================================');
+  console.log(' JACKFLIX AUTOMATION - SINGLE RUN');
+  console.log('==========================================\n');
 
   console.log(
     'Current time:',
-    getCurrentTimeInTimezone()
+    getCurrentTime()
   );
 
   console.log(
-    'Configured start:',
+    'Configured job start:',
     JOB_START_TIME
   );
 
@@ -484,50 +226,287 @@ function startRunner() {
     JOB_TIMEZONE
   );
 
-  scheduleLoop();
+  console.log(
+    'Execution mode:',
+    'ONE SHOT'
+  );
 
-  // Check start time every 30 seconds.
-  const schedulerTimer =
-    setInterval(
-      scheduleLoop,
-      30 * 1000
+  try {
+    // --------------------------------------------------------
+    // Validate environment
+    // --------------------------------------------------------
+
+    console.log(
+      '\n🔐 Checking environment...'
     );
 
-  const shutdown =
-    () => {
-      clearInterval(
-        schedulerTimer
+    validateEnvironment();
+
+    console.log(
+      '✅ Required environment variables are present.'
+    );
+
+    // --------------------------------------------------------
+    // Show current sequence state
+    // --------------------------------------------------------
+
+    const lastUploaded =
+      await getLastUploadedPart();
+
+    const nextRequired =
+      await getNextRequiredPart();
+
+    console.log(
+      '\n📊 Current sequence state:'
+    );
+
+    console.log(
+      'Last uploaded part:',
+      lastUploaded
+    );
+
+    console.log(
+      'Next required part:',
+      nextRequired
+    );
+
+    // --------------------------------------------------------
+    // RUN PUBLISH PIPELINE
+    // --------------------------------------------------------
+
+    console.log(
+      '\n🚀 Starting one publishing cycle...'
+    );
+
+    const result =
+      await publishNextPart();
+
+    // --------------------------------------------------------
+    // RESULT: UPLOADED
+    // --------------------------------------------------------
+
+    if (
+      result?.status === 'UPLOADED'
+    ) {
+      console.log('\n==========================================');
+      console.log(' ✅ AUTOMATION RUN SUCCESSFUL');
+      console.log('==========================================\n');
+
+      console.log(
+        'Uploaded part:',
+        result.partNumber
       );
 
-      stopJob();
-
-      process.exit(
-        0
+      console.log(
+        'File:',
+        result.fileName
       );
-    };
 
-  process.on(
-    'SIGINT',
-    shutdown
-  );
+      console.log(
+        'YouTube Video ID:',
+        result.videoId
+      );
 
-  process.on(
-    'SIGTERM',
-    shutdown
-  );
+      console.log(
+        'YouTube URL:',
+        result.videoUrl
+      );
+
+      console.log(
+        'Next part:',
+        result.nextPart
+      );
+
+      console.log(
+        'Next status:',
+        result.nextStatus
+      );
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // RESULT: WAITING
+    // --------------------------------------------------------
+
+    if (
+      result?.status === 'WAITING'
+    ) {
+      await handleWaitingForFile(
+        result
+      );
+
+      console.log('\n==========================================');
+      console.log(' ⏳ RUN COMPLETED - WAITING');
+      console.log('==========================================\n');
+
+      console.log(
+        `Waiting for ${result.partNumber}.mp4`
+      );
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // RESULT: ALREADY UPLOADED
+    // --------------------------------------------------------
+
+    if (
+      result?.status === 'ALREADY_UPLOADED'
+    ) {
+      console.log('\n==========================================');
+      console.log(' ✅ PART ALREADY PROCESSED');
+      console.log('==========================================\n');
+
+      console.log(
+        `Part ${result.partNumber} is already marked UPLOADED.`
+      );
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // RESULT: BUSY
+    // --------------------------------------------------------
+
+    if (
+      result?.status === 'BUSY'
+    ) {
+      console.log('\n==========================================');
+      console.log(' ⏳ PIPELINE BUSY');
+      console.log('==========================================\n');
+
+      console.log(
+        'Another publishing process is already running.'
+      );
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // RESULT: FAILED
+    // --------------------------------------------------------
+
+    if (
+      result?.status === 'FAILED'
+    ) {
+      console.error('\n==========================================');
+      console.error(' ❌ PIPELINE FAILED');
+      console.error('==========================================\n');
+
+      console.error(
+        'Part:',
+        result.partNumber
+      );
+
+      console.error(
+        'Error:',
+        result.error
+      );
+
+      // publishNextPart already saves the failure state
+      // and sends failure email.
+
+      process.exitCode = 1;
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // UNKNOWN RESULT
+    // --------------------------------------------------------
+
+    console.log(
+      '\n⚠️ Unknown pipeline result:'
+    );
+
+    console.log(
+      JSON.stringify(
+        result,
+        null,
+        2
+      )
+    );
+
+  } catch (error) {
+    console.error('\n==========================================');
+    console.error(' ❌ RUN ONCE FAILED');
+    console.error('==========================================\n');
+
+    console.error(
+      error?.message ||
+      error
+    );
+
+    // --------------------------------------------------------
+    // Try to notify by email
+    // --------------------------------------------------------
+
+    try {
+      const nextPart =
+        await getNextRequiredPart();
+
+      const job =
+        await getJobState(
+          nextPart
+        );
+
+      await sendFailureEmail({
+        partNumber:
+          nextPart,
+
+        fileName:
+          job?.fileName ||
+          `${nextPart}.mp4`,
+
+        stage:
+          'RUN_ONCE',
+
+        error:
+          error?.message ||
+          String(error),
+
+        retryCount:
+          Number(
+            job?.retryCount || 0
+          ) + 1,
+
+        nextRetryAt:
+          'Next scheduled GitHub Actions run',
+      });
+
+      console.log(
+        '📧 Failure notification sent.'
+      );
+
+    } catch (emailError) {
+      console.error(
+        '⚠️ Could not send failure notification:',
+        emailError.message
+      );
+    }
+
+    process.exitCode = 1;
+
+  } finally {
+    const elapsed =
+      Date.now() -
+      startedAt;
+
+    console.log(
+      `\n⏱️ Total execution time: ${(
+        elapsed / 1000
+      ).toFixed(2)} seconds`
+    );
+
+    console.log(
+      '🏁 GitHub Actions run finished.'
+    );
+  }
 }
 
 // ============================================================
-// EXPORTS & DIRECT EXECUTION
+// START
 // ============================================================
 
-module.exports = {
-  startRunner,
-  startJob,
-  stopJob,
-  runProcessingCheck,
-};
-
-if (require.main === module) {
-  startRunner();
-}
+main();

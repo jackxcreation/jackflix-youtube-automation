@@ -1,14 +1,19 @@
 {
   "name": "yt-automation",
   "version": "1.0.0",
-  "description": "",
+  "description": "JackFlix YouTube Automation Pipeline",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node src/publisher/jobRunner.js"
+    "start": "node src/pipeline/jobRunner.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "youtube",
+    "automation",
+    "shorts",
+    "jackflix"
+  ],
+  "author": "JackFlix",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {

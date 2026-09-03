@@ -2,8 +2,10 @@ name: JackFlix Automation Pipeline
 
 on:
   schedule:
-    # Har 10 minute par Google Drive aur pipeline check karega
-    - cron: '*/10 * * * *'
+    # Subah 6:00 AM (IST) ke aaspas har 10 minute par chalega (US Prime Time)
+    - cron: '*/10 0 * * *'  
+    # Shaam 8:00 PM (IST) ke aaspas har 10 minute par chalega (Global Mix Time)
+    - cron: '*/10 14 * * *' 
   workflow_dispatch: # GitHub Actions tab se manually run karne ke liye
 
 jobs:
@@ -45,4 +47,4 @@ jobs:
           echo "JOB_TIMEZONE=${{ secrets.JOB_TIMEZONE }}" >> .env
 
       - name: Run Automation Execution Check
-        run: node -e "const { runProcessingCheck } = require('./src/pipeline/jobRunner'); (async () => { await runProcessingCheck(); process.exit(0); })();"
+        run: node src/pipeline/jobRunner.js
