@@ -45,4 +45,4 @@ jobs:
           echo "JOB_TIMEZONE=${{ secrets.JOB_TIMEZONE }}" >> .env
 
       - name: Run Automation Execution Check
-        run: node -e "const { runProcessingCheck } = require('./src/publisher/jobRunner'); (async () => { await runProcessingCheck(); process.exit(0); })();"
+        run: node -e "const { runProcessingCheck } = require('./src/pipeline/jobRunner'); (async () => { await runProcessingCheck(); process.exit(0); })();"
