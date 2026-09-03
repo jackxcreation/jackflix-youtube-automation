@@ -1,11 +1,8 @@
 name: JackFlix Automation Pipeline
 
 on:
-  schedule:
-    # Subah 6:00 AM (IST) ke aaspas har 10 minute par chalega (US Prime Time)
-    - cron: '*/10 0 * * *'  
-    # Shaam 8:00 PM (IST) ke aaspas har 10 minute par chalega (Global Mix Time)
-    - cron: '*/10 14 * * *' 
+  repository_dispatch:
+    types: [run-pipeline] # External cron-job service se 100% precise trigger ke liye
   workflow_dispatch: # GitHub Actions tab se manually run karne ke liye
 
 jobs:
