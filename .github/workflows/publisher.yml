@@ -1,0 +1,48 @@
+name: JackFlix Automation Pipeline
+
+on:
+  schedule:
+    # Har 10 minute par Google Drive aur pipeline check karega
+    - cron: '*/10 * * * *'
+  workflow_dispatch: # GitHub Actions tab se manually run karne ke liye
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install FFmpeg (Shorts validation ke liye)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Inject Secrets into .env
+        run: |
+          echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
+          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env
+          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env
+          echo "GOOGLE_REFRESH_TOKEN=${{ secrets.GOOGLE_REFRESH_TOKEN }}" >> .env
+          echo "RAW_FOLDER_ID=${{ secrets.RAW_FOLDER_ID }}" >> .env
+          echo "GOOGLE_SHEET_ID=${{ secrets.GOOGLE_SHEET_ID }}" >> .env
+          echo "GOOGLE_SHEET_NAME=${{ secrets.GOOGLE_SHEET_NAME }}" >> .env
+          echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env
+          echo "ALERT_EMAIL=${{ secrets.ALERT_EMAIL }}" >> .env
+          echo "RESEND_FROM_EMAIL=${{ secrets.RESEND_FROM_EMAIL }}" >> .env
+          echo "YOUTUBE_PRIVACY=${{ secrets.YOUTUBE_PRIVACY }}" >> .env
+          echo "YOUTUBE_CATEGORY_ID=${{ secrets.YOUTUBE_CATEGORY_ID }}" >> .env
+          echo "JOB_START_TIME=${{ secrets.JOB_START_TIME }}" >> .env
+          echo "JOB_TIMEZONE=${{ secrets.JOB_TIMEZONE }}" >> .env
+
+      - name: Run Automation Execution Check
+        run: node -e "const { runProcessingCheck } = require('./src/publisher/jobRunner'); (async () => { await runProcessingCheck(); process.exit(0); })();"
