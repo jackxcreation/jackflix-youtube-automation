@@ -4,11 +4,18 @@ const { GoogleGenAI } = require('@google/genai');
 const { Resend } = require('resend');
 require('dotenv').config();
 
-// Authentication Setup
-const credentials = JSON.parse(fs.readFileSync('credentials.json'));
-const { client_secret, client_id, redirect_uris } = credentials.installed;
-const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
-oAuth2Client.setCredentials(JSON.parse(fs.readFileSync('token.json')));
+// ============================================================
+// 🔐 CLOUD AUTHENTICATION SETUP (No local JSON files needed)
+// ============================================================
+const oAuth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    'http://localhost:3000/oauth2callback' // Fallback redirect URI
+);
+
+oAuth2Client.setCredentials({
+    refresh_token: process.env.GOOGLE_REFRESH_TOKEN
+});
 
 const youtube = google.youtube({ version: 'v3', auth: oAuth2Client });
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
