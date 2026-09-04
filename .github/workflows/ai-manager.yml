@@ -1,0 +1,32 @@
+name: 🧠 JackFlix AI Supreme Manager
+
+on:
+  repository_dispatch:
+    types: [run-manager] # Yeh secret keyword hai jo cron-job.org se aayega
+  workflow_dispatch: # Manual button ke liye
+
+jobs:
+  run-manager:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📂 Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: 📦 Install Dependencies
+        run: npm install googleapis @google/genai resend dotenv
+
+      - name: 🚀 Run AI Manager Script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+        run: node manager.js

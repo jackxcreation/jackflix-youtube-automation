@@ -26,11 +26,12 @@ const oAuth2Client = new google.auth.OAuth2(
   REDIRECT_URI
 );
 
+// 🔥 SCOPES FIXED: Google doesn't allow mixing broad (force-ssl) and narrow (upload/readonly) scopes.
+// Yeh 3 "Master Scopes" tere saare kaam (Upload, Read, Comment, Drive, Sheets) akele kar denge.
 const SCOPES = [
-  'https://www.googleapis.com/auth/youtube.upload',
-  'https://www.googleapis.com/auth/youtube.readonly',
-  'https://www.googleapis.com/auth/drive.readonly',
-  'https://www.googleapis.com/auth/spreadsheets'
+  'https://www.googleapis.com/auth/youtube.force-ssl', 
+  'https://www.googleapis.com/auth/drive',             
+  'https://www.googleapis.com/auth/spreadsheets'       
 ];
 
 function generateToken() {
@@ -124,7 +125,7 @@ function generateToken() {
       console.log('==========================================');
       console.log('✅ token.json created');
       console.log('✅ Refresh token received');
-      console.log('✅ YouTube + Drive + Sheets OAuth ready');
+      console.log('✅ YouTube + Drive + Sheets + Manager OAuth ready');
       console.log('==========================================\n');
 
       res.writeHead(200, {
